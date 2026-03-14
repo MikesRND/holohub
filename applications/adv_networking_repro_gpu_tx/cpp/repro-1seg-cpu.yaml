@@ -1,0 +1,48 @@
+# Probe variant: 1-segment CPU
+# Single CPU segment per packet (header + payload contiguous).
+# Isolates whether the burst ceiling requires multi-segment chaining or GPU memory.
+
+repro:
+  gpu_device: 0
+  port_id: 0
+  queue_id: 0
+  num_packets: 2          # packets per burst
+  max_bursts: 200         # stop after this many
+  header_bytes: 64        # benchmark parity: pad seg0 to 64 bytes
+  payload_bytes: 64       # trivial payload per packet
+  src_ip: "192.168.1.10"  # EDIT for your host
+  dst_ip: "192.168.1.20"  # EDIT for your target
+  src_port: 4096          # benchmark parity
+  dst_port: 4096          # benchmark parity
+  dst_mac: "b8:ce:f6:xx:xx:xx"  # EDIT for your target NIC
+  num_segs: 1
+  use_gpu: false
+
+advanced_network:
+  cfg:
+    version: 1
+    manager: dpdk
+    master_core: 0
+    debug: false
+    log_level: info
+    tx_meta_buffers: 256
+    rx_meta_buffers: 256
+    memory_regions:
+      - name: TX_Data
+        kind: huge
+        affinity: 0
+        num_bufs: 16384
+        buf_size: 128       # >= header_bytes + payload_bytes
+    interfaces:
+      - name: tx_port
+        address: "0000:17:00.0"   # EDIT: NIC PCIe address
+        tx:
+          queues:
+            - name: tx_q_0
+              id: 0
+              cpu_core: "11"      # EDIT: dedicated TX worker core
+              batch_size: 2
+              memory_regions:
+                - TX_Data
+              offloads:
+                - tx_eth_src

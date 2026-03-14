@@ -17,6 +17,9 @@
 add_holohub_application(adv_networking_bench DEPENDS
                         OPERATORS advanced_network)
 
+add_holohub_application(adv_networking_repro_gpu_tx DEPENDS
+                        OPERATORS advanced_network)
+
 add_holohub_application(aja_video_capture DEPENDS
                         OPERATORS aja_source)
 

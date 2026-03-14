@@ -1,0 +1,31 @@
+{
+	"application": {
+		"name": "Advanced Networking GPU TX Reproducer",
+		"authors": [
+			{
+				"name": "Mike Collins",
+				"affiliation": "NVIDIA"
+			}
+		],
+		"language": "C++",
+		"version": "1.0",
+		"changelog": {
+			"1.0": "Initial reproducer for 2-seg GPU TX crash"
+		},
+		"platforms": ["x86_64"],
+		"tags": ["Networking and Distributed Computing", "DPDK", "GPUDirect", "Bug Reproducer"],
+		"dockerfile": "operators/advanced_network/Dockerfile",
+		"holoscan_sdk": {
+			"minimum_required_version": "2.6.0",
+			"tested_versions": [
+				"2.6.0"
+			]
+		},
+		"ranking": 4,
+		"requirements": {},
+		"run": {
+			"command": "<holohub_app_bin>/adv_networking_repro_gpu_tx",
+			"workdir": "holohub_bin"
+		}
+	}
+}
