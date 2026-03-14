@@ -1,22 +1,33 @@
-# Advanced Networking GPU TX Reproducer
+# DPDK split-TX backpressure failure reproducer
 
-Minimal reproducer for the ANO split-TX ~63 burst ceiling.
+## Overview
 
-Single-file C++ (`main.cpp`), raw ANO API calls, no application framework.
-Retries on `NO_FREE_BURST_BUFFERS` as backpressure and reports stats.
+High-level problem: DPDK split-TX does not safely enforce backpressure in the 2-segment GPU-backed path.
+
+At full speed (tight-loop pacing), the path crashes during
+`DpdkMgr::get_tx_packet_burst()`
+instead of returning a clean backpressure/error condition.
+
+Current observed behavior:
+
+- `2-seg GPU` fails at full speed
+- `2-seg GPU` succeeds when sufficient gaps between bursts are added
+- `2-seg CPU` succeeds at full speed
+- `1-seg CPU` succeeds at full speed
+
+Results in [FINDINGS.md](./FINDINGS.md).
 
 ## Problem
 
-With 2-segment (HDS) TX — CPU header pool + GPU payload pool —
-`get_tx_packet_burst()` returns `NO_FREE_BURST_BUFFERS` after ~63
-consecutive sends, regardless of pool sizes. The burst buffers are not
-being reclaimed fast enough; adding inter-burst pacing (`--pace >= 50`)
-lets the TX worker catch up and the ceiling disappears.
+This reproducer exercises a DPDK split-TX backpressure failure in the 2-segment GPU-backed path.
 
-Holoscan's `adv_networking_bench` succeeds on the same link, likely
-because its Holoscan scheduler introduces enough pacing naturally.
+At a high level:
 
-## Probe variants
+- baseline `repro.yaml` reproduces the problem
+- `repro-2seg-cpu.yaml` and `repro-1seg-cpu.yaml` are cpu-only vriants
+- regulating the burst rate prevents the issue, but is not a solution
+
+## YAML configs
 
 Three YAML configs isolate which variables contribute to the burst ceiling:
 
@@ -26,23 +37,13 @@ Three YAML configs isolate which variables contribute to the burst ceiling:
 | `repro-2seg-cpu.yaml` | 2 | false | CPU header + CPU payload | Isolates GPU vs multi-segment |
 | `repro-1seg-cpu.yaml` | 1 | false | Single CPU region | Isolates multi-segment chaining |
 
-## Confirmed results
+**Knobs:**
 
-Tested in `rnd-containers/ano-dev` with 2 packets per burst and 2 TX
-segments per packet.
+| Field | Default | Description |
+|-------|---------|-------------|
+| `num_segs` | 2 | Segments per packet: 1 (single CPU) or 2 (header + payload) |
+| `use_gpu` | true | GPU device memory for payload segment (must be false when `num_segs == 1`) |
 
-### Pacing sweep
-
-| pace_us | bursts_sent | retries | result |
-|---------|-------------|---------|--------|
-| 0       | 200         | heavy   | backpressure retries kick in around burst 63 |
-| 10      | 200         | heavy   | same |
-| 50      | 200         | 0       | no backpressure |
-| 100     | 200         | 0       | no backpressure |
-| 250     | 200         | 0       | no backpressure |
-
-Compare `packets_sent` against DPDK `tx_good_packets` (printed on
-shutdown) to detect TX-side loss.
 
 ## Build
 
@@ -70,13 +71,6 @@ Usage: adv_networking_repro_gpu_tx [--yaml <path>] [--pace <us>]
   --yaml   Config file (default: repro.yaml next to binary)
   --pace   Microseconds between bursts (default: 0 = tight loop)
 ```
-
-### YAML knobs
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `num_segs` | 2 | Segments per packet: 1 (single CPU) or 2 (header + payload) |
-| `use_gpu` | true | GPU device memory for payload segment (must be false when `num_segs == 1`) |
 
 ## Run
 
@@ -112,48 +106,3 @@ for p in 0 10 50 100 250; do
 done
 ```
 
-## Recommended data collection
-
-Collect this minimal set first:
-
-```bash
-# Baseline 2-seg GPU
-./holohub run adv_networking_repro_gpu_tx \
-  --language cpp --as-root --docker-opts="--privileged" \
-  --run-args="--pace 0"
-
-# 2-seg CPU
-./holohub run adv_networking_repro_gpu_tx \
-  --language cpp --as-root --docker-opts="--privileged" \
-  --run-args="--yaml repro-2seg-cpu.yaml --pace 0"
-
-# 1-seg CPU
-./holohub run adv_networking_repro_gpu_tx \
-  --language cpp --as-root --docker-opts="--privileged" \
-  --run-args="--yaml repro-1seg-cpu.yaml --pace 0"
-
-# Optional pacing comparison on baseline
-./holohub run adv_networking_repro_gpu_tx \
-  --language cpp --as-root --docker-opts="--privileged" \
-  --run-args="--pace 50"
-```
-
-Compare these summary fields across runs:
-
-- `bursts_sent`
-- `bursts_retried`
-- `total_retries`
-- `max_retries_burst`
-- `first_failure_stage`
-- `first_failure_status`
-- `exit_code`
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `main.cpp` | Entire reproducer |
-| `repro.yaml` | Baseline config — 2-seg GPU (edit host-specific values) |
-| `repro-2seg-cpu.yaml` | Probe — 2-seg CPU (both segments hugepage) |
-| `repro-1seg-cpu.yaml` | Probe — 1-seg CPU (single contiguous segment) |
-| `CMakeLists.txt` | Build config — links ANO, CUDA, yaml-cpp |
