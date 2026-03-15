@@ -4,14 +4,15 @@
 
 High-level problem: DPDK split-TX does not safely enforce backpressure in the 2-segment GPU-backed path.
 
-At full speed (tight-loop pacing), the path crashes during
-`DpdkMgr::get_tx_packet_burst()`
-instead of returning a clean backpressure/error condition.
+This reproducer was used to validate the TX hardening and partial-cleanup fix
+for that path. With the current fix set, the full-speed 2-segment GPU case no
+longer crashes. It can hit transient burst-pool exhaustion during
+`DpdkMgr::get_tx_packet_burst()`, retry, and recover cleanly.
 
 Current observed behavior:
 
-- `2-seg GPU` fails at full speed
-- `2-seg GPU` succeeds when sufficient gaps between bursts are added
+- `2-seg GPU` succeeds at full speed with transient retry-based recovery
+- `2-seg GPU` succeeds when gaps between bursts are added
 - `2-seg CPU` succeeds at full speed
 - `1-seg CPU` succeeds at full speed
 
@@ -19,13 +20,14 @@ Results in [FINDINGS.md](./FINDINGS.md).
 
 ## Problem
 
-This reproducer exercises a DPDK split-TX backpressure failure in the 2-segment GPU-backed path.
+This reproducer exercises the DPDK split-TX backpressure edge case in the
+2-segment GPU-backed path and validates that recovery is now fail-safe.
 
 At a high level:
 
-- baseline `repro.yaml` reproduces the problem
-- `repro-2seg-cpu.yaml` and `repro-1seg-cpu.yaml` are cpu-only vriants
-- regulating the burst rate prevents the issue, but is not a solution
+- baseline `repro.yaml` exercises the transient burst-pool exhaustion path
+- `repro-2seg-cpu.yaml` and `repro-1seg-cpu.yaml` are CPU-only variants
+- regulating the burst rate reduces backpressure, but is not the fix
 
 ## YAML configs
 
@@ -77,7 +79,7 @@ Usage: adv_networking_repro_gpu_tx [--yaml <path>] [--pace <us>]
 Requires root for DPDK hugepage and NIC access.
 
 ```bash
-# Baseline 2-seg GPU (reproduces burst ceiling)
+# Baseline 2-seg GPU (may hit transient exhaustion and retry, should recover)
 ./holohub run adv_networking_repro_gpu_tx \
   --language cpp --as-root --docker-opts="--privileged"
 
@@ -106,3 +108,10 @@ for p in 0 10 50 100 250; do
 done
 ```
 
+## Expected results
+
+- `repro.yaml --pace 0`: may log transient burst-pool exhaustion in
+  `get_tx_packet_burst()`, then retry and complete without `SIGSEGV`
+- `repro.yaml --pace 50`: should complete cleanly
+- `repro-2seg-cpu.yaml --pace 0`: should complete cleanly
+- `repro-1seg-cpu.yaml --pace 0`: should complete cleanly

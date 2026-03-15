@@ -1,6 +1,7 @@
 # Findings
 
-This note captures observed behavior from the demo app. 
+This note captures the current observed behavior from the demo app after the
+DPDK TX hardening and partial-cleanup fixes.
 
 ## Test setup
 
@@ -17,8 +18,9 @@ Observed on:
 
 Observed across current runs:
 
-- `2-seg GPU` crashes in `DpdkMgr::get_tx_packet_burst()` at `pace_us=0`
-- `2-seg GPU` also crashes in the same place at `pace_us=50`
+- `2-seg GPU` at `pace_us=0` no longer segfaults; it hits transient burst-pool
+  exhaustion, retries, and completes cleanly
+- `2-seg GPU` succeeds cleanly at `pace_us=50`
 - `2-seg GPU` succeeds cleanly at `pace_us=100`
 - `2-seg CPU` succeeds cleanly at `pace_us=0`
 - `1-seg CPU` succeeds cleanly at `pace_us=0`
@@ -39,22 +41,24 @@ The reproducer variants isolate whether the failure tracks GPU-backed memory, mu
 
 | Variant | `pace_us` | bursts_sent | retries | result | DPDK `tx_good_packets` |
 |---------|-----------|-------------|---------|--------|------------------------|
-| 2-seg GPU | 0 | 63 | 0 | SIGSEGV in `get_tx_packet_burst()` | none (no clean shutdown) |
-| 2-seg GPU | 50 | 63 | 0 | SIGSEGV in `get_tx_packet_burst()` | none (no clean shutdown) |
+| 2-seg GPU | 0 | 200/200 | 27 | clean after transient burst-pool exhaustion and retry | 400 |
+| 2-seg GPU | 50 | 200/200 | 0 | clean | 400 |
 | 2-seg GPU | 100 | 200/200 | 0 | clean | 400 |
-| 2-seg GPU | 100 | 200/200 | 0 | clean (repeat) | 400 |
 | 2-seg CPU | 0 | 200/200 | 0 | clean | 400 |
 | 1-seg CPU | 0 | 200/200 | 0 | clean | 400 |
 
 Observations:
 
 - Both CPU control variants complete at full speed with zero retries.
-- The failing configuration is the one that combines `num_segs=2` with GPU-backed payload memory.
-- Pacing changes the outcome for the GPU-backed variant, but only at the higher tested value (`100us`).
+- The only configuration that needs retries is the one that combines
+  `num_segs=2` with GPU-backed payload memory at `pace_us=0`.
+- In the latest run, transient exhaustion occurred at `seg=1` around burst 63,
+  then recovered after 27 retries.
+- Pacing removes the retry pressure in the tested GPU-backed runs.
 
-## Crash signature
+## Historical crash signature
 
-Observed crash across failing GPU runs:
+Before the cleanup fix, failing GPU runs produced:
 
 ```text
 Signal 11 (Segmentation fault: address not mapped to object at address (nil))
@@ -63,10 +67,4 @@ Signal 11 (Segmentation fault: address not mapped to object at address (nil))
   adv_networking_repro_gpu_tx(main)
 ```
 
-Observations:
-
-- The crash happens during burst acquisition, not during payload fill or send.
-- The crash is inside `DpdkMgr::get_tx_packet_burst()`, with the top external
-  frame in `librte_mempool_ring.so.25.0`.
-- In this dataset, the crash occurs after 63 successful sends in the failing GPU-backed runs.
-
+The current fixed behavior no longer reproduces this crash.
