@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
       auto as = ano::get_tx_packet_burst(burst);
       if (as == ano::Status::SUCCESS) { acquired = true; break; }
 
-      ano::free_all_packets_and_burst_tx(burst);
+      ano::free_tx_metadata(burst);
       if (as == ano::Status::NO_FREE_BURST_BUFFERS && retries < kMaxRetries) {
         ++retries; usleep(10); continue;
       }
