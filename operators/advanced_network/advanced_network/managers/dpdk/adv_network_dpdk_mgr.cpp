@@ -1491,28 +1491,60 @@ struct rte_flow* DpdkMgr::add_modify_flow_set(int port, int queue, const char* b
   pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
 
   res = rte_flow_validate(port, &attr, pattern, action, &error);
-  if (!res) {
-    flow = rte_flow_create(port, &attr, pattern, action, &error);
-    return flow;
+  if (res != 0) {
+    HOLOSCAN_LOG_WARN("rte_flow_validate failed for port {} queue {}: {}",
+                      port, queue,
+                      (error.message ? error.message : "unknown"));
+    return nullptr;
   }
 
-  return nullptr;
+  memset(&error, 0, sizeof(error));
+  flow = rte_flow_create(port, &attr, pattern, action, &error);
+  if (!flow) {
+    HOLOSCAN_LOG_WARN("rte_flow_create failed for port {} queue {}: {}",
+                      port, queue,
+                      (error.message ? error.message : "unknown"));
+  }
+  return flow;
 }
 
 void DpdkMgr::apply_tx_offloads(int port) {
   for (const auto& q : cfg_.ifs_[port].tx_.queues_) {
     for (const auto& off : q.common_.offloads_) {
       if (off == "tx_eth_src") {  // Offload Ethernet source copy
-        HOLOSCAN_LOG_INFO("Applying {} offload for port {}", off, port);
+        HOLOSCAN_LOG_INFO("Applying {} offload for port {} queue {}", off, port, q.common_.id_);
         const auto mac_bytes = mac_addrs[port];
-        add_modify_flow_set(port,
-                            q.common_.id_,
-                            reinterpret_cast<const char*>(&mac_bytes),
-                            sizeof(mac_bytes) * 8,
-                            Direction::TX);
+        auto* flow = add_modify_flow_set(port,
+                                         q.common_.id_,
+                                         reinterpret_cast<const char*>(&mac_bytes),
+                                         sizeof(mac_bytes) * 8,
+                                         Direction::TX);
+        if (flow) {
+          tx_offload_flows_.push_back({static_cast<uint16_t>(port),
+                                       static_cast<uint16_t>(q.common_.id_),
+                                       off, flow});
+          HOLOSCAN_LOG_INFO("tx_eth_src offload installed for port {} queue {}",
+                            port, q.common_.id_);
+        }
+        // Failure already logged with rte_flow error detail inside add_modify_flow_set()
       }
     }
   }
+}
+
+void DpdkMgr::destroy_tx_offload_flows() {
+  struct rte_flow_error error;
+  for (auto& entry : tx_offload_flows_) {
+    if (entry.flow) {
+      memset(&error, 0, sizeof(error));
+      if (rte_flow_destroy(entry.port, entry.flow, &error) != 0) {
+        HOLOSCAN_LOG_WARN("Failed to destroy {} offload flow for port {} queue {}: {}",
+                          entry.offload_name, entry.port, entry.queue,
+                          (error.message ? error.message : "unknown"));
+      }
+    }
+  }
+  tx_offload_flows_.clear();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1573,6 +1605,9 @@ void DpdkMgr::PrintDpdkStats(int port) {
 }
 
 DpdkMgr::~DpdkMgr() {
+    // Fallback: destroy any retained TX offload flows not cleaned up by shutdown()
+    destroy_tx_offload_flows();
+
     // Add cleanup for rings in the map
     for (auto const& [key, val] : rx_rings) {
         if (val != nullptr) {
@@ -2604,6 +2639,8 @@ void DpdkMgr::shutdown() {
 
     HOLOSCAN_LOG_INFO("advanced_network DPDK manager shutting down");
     force_quit.store(true);
+
+    destroy_tx_offload_flows();
 
     stats_.Shutdown();
     stats_thread_.join();

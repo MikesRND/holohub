@@ -153,6 +153,15 @@ class DpdkMgr : public Manager {
   struct rte_flow* add_flex_item_flow(int port, const FlexItemMatch& match, uint16_t queue_id);
 
   void apply_tx_offloads(int port);
+  void destroy_tx_offload_flows();
+
+  struct TxOffloadFlow {
+    uint16_t    port;
+    uint16_t    queue;
+    std::string offload_name;
+    struct rte_flow* flow;
+  };
+  std::vector<TxOffloadFlow> tx_offload_flows_;
 
   std::array<struct rte_ether_addr, MAX_IFS> mac_addrs;
   std::unordered_map<uint32_t, struct rte_ring*> rx_rings;
